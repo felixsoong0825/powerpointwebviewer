@@ -121,7 +121,8 @@
       justify-content: center;
       transition: background 0.2s;
     }
-    #toggleBtn:hover { background: rgba(255,255,255,1); }
+    #toggleBtn { opacity: 0.35; }
+    #toggleBtn:hover { background: rgba(255,255,255,1); opacity: 1; }
     #toggleBtn.visible { display: flex; }
 
     /* Environment badge */
@@ -165,8 +166,14 @@
       height: 100%;
       border: none;
       background: white;
-      transform-origin: 0 0;
+      display: block;
     }
+    /* Fallback only for engines without CSS zoom */
+    #webFrame.transform-zoom { transform-origin: 0 0; }
+
+    /* Slide show: no blue border, page fills the whole frame */
+    body.presenting { padding: 0; background: #fff; }
+    body.presenting #appWrapper { border-radius: 0; }
 
     /* Zoom controls */
     .zoom-group {
@@ -661,15 +668,39 @@
     // ─── Zoom ─────────────────────────────────────────────
     // Scales the iframe like browser zoom: the page lays out in a
     // viewport of (frame size / zoom), then is scaled to fit the frame.
-    const ZOOM_LEVELS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+    // CSS zoom makes the browser re-render the page at the new scale, so text
+    // stays sharp. transform: scale() (blurry) is only a fallback.
+    const ZOOM_LEVELS = [0.25, 0.33, 0.5, 0.6, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+    const DEFAULT_ZOOM = 0.6;
     const zoomLabel = document.getElementById('zoomLabel');
-    let zoom = 1;
+    const useCssZoom = !!(window.CSS && CSS.supports && CSS.supports('zoom', '0.5'));
+    let zoom = DEFAULT_ZOOM;
 
     function applyZoom() {
-      webFrame.style.width = (100 / zoom) + '%';
-      webFrame.style.height = (100 / zoom) + '%';
-      webFrame.style.transform = zoom === 1 ? '' : 'scale(' + zoom + ')';
+      var w = appWrapper.clientWidth, h = appWrapper.clientHeight;
+      if (useCssZoom) {
+        // Pixel lengths are multiplied by zoom, so the frame still fills the box
+        webFrame.style.zoom = zoom;
+        webFrame.style.width = (w / zoom) + 'px';
+        webFrame.style.height = (h / zoom) + 'px';
+      } else {
+        webFrame.classList.add('transform-zoom');
+        webFrame.style.width = (w / zoom) + 'px';
+        webFrame.style.height = (h / zoom) + 'px';
+        webFrame.style.transform = zoom === 1 ? '' : 'scale(' + zoom + ')';
+      }
       zoomLabel.textContent = Math.round(zoom * 100) + '%';
+    }
+    if (window.ResizeObserver) new ResizeObserver(applyZoom).observe(appWrapper);
+    window.addEventListener('resize', applyZoom);
+    applyZoom();
+
+    // ─── Slide show mode: hide controls and border ───────
+    function applyView(view) {
+      var presenting = view === 'read';
+      document.body.classList.toggle('presenting', presenting);
+      if (presenting && currentUrl) setControlsVisible(false);
+      applyZoom();
     }
 
     function setZoom(z, skipSave) {
@@ -815,7 +846,7 @@
       try {
         if (Office.context && Office.context.document && Office.context.document.settings) {
           var savedZoom = parseFloat(Office.context.document.settings.get('webViewerZoom'));
-          if (savedZoom) setZoom(savedZoom, true);
+          setZoom(savedZoom || DEFAULT_ZOOM, true);
           var savedUrl = Office.context.document.settings.get('webViewerUrl');
           if (savedUrl) {
             urlInput.value = savedUrl;
@@ -825,8 +856,21 @@
             loading.classList.add('active');
             webFrame.src = currentUrl;
             startLoadTimeout();
+            setControlsVisible(false);   // clean view by default; ⚙ brings controls back
           }
         }
+      } catch (e) {
+        // Silent: Office API not available (standalone/testing mode)
+      }
+
+      // Edit view vs slide show
+      try {
+        Office.context.document.getActiveViewAsync(function (r) {
+          if (r.status === Office.AsyncResultStatus.Succeeded) applyView(r.value);
+        });
+        Office.context.document.addHandlerAsync(Office.EventType.ActiveViewChanged, function (e) {
+          applyView(e.activeView);
+        });
       } catch (e) {
         // Silent: Office API not available (standalone/testing mode)
       }

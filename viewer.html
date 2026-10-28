@@ -165,7 +165,21 @@
       height: 100%;
       border: none;
       background: white;
+      transform-origin: 0 0;
     }
+
+    /* Zoom controls */
+    .zoom-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      background: #eef1f5;
+      border-radius: 8px;
+      padding: 2px;
+    }
+    .zoom-group .btn { padding: 6px 10px; background: transparent; color: #333; }
+    .zoom-group .btn:hover { background: #dde3ea; }
+    #zoomLabel { min-width: 52px; text-align: center; font-variant-numeric: tabular-nums; }
 
     /* Error / status overlay */
     #overlay {
@@ -309,6 +323,11 @@
     <input id="urlInput" type="text" placeholder="Enter website URL (e.g. https://example.com)" />
     <button class="btn btn-primary" onclick="loadUrl()">Load</button>
     <button class="btn btn-icon" onclick="reloadFrame()" title="Reload page">↻</button>
+    <div class="zoom-group">
+      <button class="btn" onclick="zoomStep(-1)" title="Zoom out (Ctrl -)">−</button>
+      <button id="zoomLabel" class="btn" onclick="setZoom(1)" title="Reset to 100% (Ctrl 0)">100%</button>
+      <button class="btn" onclick="zoomStep(1)" title="Zoom in (Ctrl +)">+</button>
+    </div>
     <button class="btn btn-icon" onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
     <button id="btnOpenWindow" class="btn btn-window" onclick="openInDialog()" title="Open in a separate window">Window</button>
     <button class="btn btn-hide" onclick="toggleControls()" title="Hide controls">✕</button>
@@ -639,6 +658,49 @@
       }, isOnline ? 12000 : 15000); // Shorter timeout for Online since it's more likely to fail
     }
 
+    // ─── Zoom ─────────────────────────────────────────────
+    // Scales the iframe like browser zoom: the page lays out in a
+    // viewport of (frame size / zoom), then is scaled to fit the frame.
+    const ZOOM_LEVELS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+    const zoomLabel = document.getElementById('zoomLabel');
+    let zoom = 1;
+
+    function applyZoom() {
+      webFrame.style.width = (100 / zoom) + '%';
+      webFrame.style.height = (100 / zoom) + '%';
+      webFrame.style.transform = zoom === 1 ? '' : 'scale(' + zoom + ')';
+      zoomLabel.textContent = Math.round(zoom * 100) + '%';
+    }
+
+    function setZoom(z, skipSave) {
+      zoom = Math.min(3, Math.max(0.25, z));
+      applyZoom();
+      if (skipSave) return;
+      try {
+        if (officeReady && Office.context && Office.context.document && Office.context.document.settings) {
+          Office.context.document.settings.set('webViewerZoom', zoom);
+          Office.context.document.settings.saveAsync();
+        }
+      } catch (e) { /* standalone/testing mode */ }
+    }
+
+    function zoomStep(dir) {
+      var i;
+      if (dir > 0) {
+        for (i = 0; i < ZOOM_LEVELS.length; i++) if (ZOOM_LEVELS[i] > zoom + 0.001) return setZoom(ZOOM_LEVELS[i]);
+      } else {
+        for (i = ZOOM_LEVELS.length - 1; i >= 0; i--) if (ZOOM_LEVELS[i] < zoom - 0.001) return setZoom(ZOOM_LEVELS[i]);
+      }
+    }
+
+    // Keyboard: Ctrl/Cmd + / - / 0 (works when focus is on the toolbar, not inside the page)
+    document.addEventListener('keydown', function (e) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomStep(1); }
+      else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomStep(-1); }
+      else if (e.key === '0') { e.preventDefault(); setZoom(1); }
+    });
+
     // ─── Save URL to Office settings ──────────────────────
     function saveUrl(url) {
       try {
@@ -752,6 +814,8 @@
       // Try to load saved URL for this slide
       try {
         if (Office.context && Office.context.document && Office.context.document.settings) {
+          var savedZoom = parseFloat(Office.context.document.settings.get('webViewerZoom'));
+          if (savedZoom) setZoom(savedZoom, true);
           var savedUrl = Office.context.document.settings.get('webViewerUrl');
           if (savedUrl) {
             urlInput.value = savedUrl;
